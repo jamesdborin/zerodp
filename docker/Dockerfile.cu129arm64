@@ -1,0 +1,140 @@
+# ============================================================
+# Stage 1: NVSHMEM Builder
+# ============================================================
+FROM nvcr.io/nvidia/cuda:12.9.0-devel-ubuntu22.04 AS deepep-builder
+
+# Add rdma libraries and build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential ninja-build cmake pkg-config wget \
+    librdmacm-dev rdma-core libfabric-dev libibverbs-dev \
+    devscripts debhelper fakeroot \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build GDRCopy
+RUN cd /tmp && \
+    wget https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v2.5.1.tar.gz && \
+    tar -xf v2.5.1.tar.gz && \
+    cd gdrcopy-2.5.1/packages/ && \
+    CUDA=/usr/local/cuda ./build-deb-packages.sh -t -k
+
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && dpkg -i /tmp/gdrcopy-2.5.1/packages/libgdrapi_*.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build NVSHMEM - Need GDRCOPY and IBGDA support for DeepEP all2all kernels
+RUN set -eux; \
+    cd /tmp; \
+    wget https://developer.nvidia.com/downloads/assets/secure/nvshmem/nvshmem_src_3.2.5-1.txz; \
+    mkdir -p nvshmem_src_3.2.5-1; \
+    tar xf nvshmem_src_3.2.5-1.txz -C nvshmem_src_3.2.5-1; \
+    cd nvshmem_src_3.2.5-1/nvshmem_src; \
+    mkdir -p build; \
+    cd build; \
+    cmake \
+    -DNVSHMEM_PREFIX=/opt/nvshmem-3.2.5 \
+    -DCMAKE_CUDA_ARCHITECTURES=90a \
+    -DNVSHMEM_MPI_SUPPORT=0 \
+    -DNVSHMEM_PMIX_SUPPORT=0 \
+    -DNVSHMEM_USE_GDRCOPY=1 \
+    -DNVSHMEM_IBGDA_SUPPORT=1 \
+    -DNVSHMEM_BUILD_TESTS=1 \
+    -DNVSHMEM_BUILD_EXAMPLES=1 \
+    -DNVSHMEM_BUILD_HYDRA_LAUNCHER=1 \
+    -DNVSHMEM_BUILD_TXZ_PACKAGE=1 \
+    -G Ninja \
+    ..; \
+    ninja; \
+    ninja install; \
+    rm -rf /tmp/nvshmem_src_3.2.5-1.txz
+
+
+
+
+# ============================================================
+# Stage 2: vLLM/Python Dependencies (slow, cache separately)
+# ============================================================
+FROM nvcr.io/nvidia/cuda:12.9.0-devel-ubuntu22.04 AS python-deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl python3 python3-venv python3-dev \
+    build-essential git cmake ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.local/bin/uv /usr/local/bin/uv
+
+ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+
+RUN uv venv /opt/pagellm/.venv --python python3 --seed && \
+    . /opt/pagellm/.venv/bin/activate && \
+    uv pip install -U pip setuptools wheel numpy && \
+    uv pip install vllm --torch-backend=auto && \
+    uv pip install flashinfer-cubin flashinfer-python
+
+# ============================================================
+# Stage 3: Final Runtime Image
+# ============================================================
+FROM nvcr.io/nvidia/cuda:12.9.0-devel-ubuntu22.04 AS runtime
+
+# Copy built artifacts from builder stages
+COPY --from=deepep-builder /opt/nvshmem-3.2.5 /opt/nvshmem-3.2.5
+COPY --from=deepep-builder /tmp/gdrcopy-2.5.1/packages/*.deb /tmp/gdrcopy/
+COPY --from=python-deps /opt/pagellm/.venv /opt/pagellm/.venv
+COPY --from=python-deps /root/.local/bin/uv /usr/local/bin/uv
+
+# for development on remote machine
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    librdmacm-dev rdma-core libfabric-dev libibverbs-dev \
+    git curl openssh-server librdmacm1 libibverbs1 libfabric1 \
+    && dpkg -i /tmp/gdrcopy/libgdrapi_*.deb \
+    && rm -rf /tmp/gdrcopy /var/lib/apt/lists/*
+
+# NVSHMEM Environment
+ENV NVSHMEM_HOME=/opt/nvshmem-3.2.5
+ENV LD_LIBRARY_PATH=${NVSHMEM_HOME}/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+ENV VLLM_HAS_FLASHINFER_CUBIN=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-venv \
+    build-essential ninja-build cmake 
+
+# DeepEP installation - TODO: pull into the deepep-builder stage
+RUN git clone https://github.com/deepseek-ai/DeepEP /deepep && \
+    cd /deepep && \
+    NVSHMEM_DIR=/opt/nvshmem-3.2.5 /opt/pagellm/.venv/bin/python setup.py install
+
+COPY cpuoffloader /opt/cpuoffloader
+RUN . /opt/pagellm/.venv/bin/activate && \ 
+    cd /opt/cpuoffloader && \
+    uv pip install -e .
+
+
+COPY sglang /opt/sglang
+RUN cd /opt/sglang && \
+    . /opt/pagellm/.venv/bin/activate && \ 
+    uv pip install -e "python"
+RUN apt-get update && apt-get install -y vim
+
+
+RUN apt-get update && apt-get install -y vim
+
+# # Install NSYS for profiling - from https://docs.nvidia.com/nsight-systems/InstallationGuide/index.html
+# RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg && \
+#     . /etc/os-release && rel="$(echo "$VERSION_ID" | tr -d .)" && arch="$(dpkg --print-architecture)" && \
+#     mkdir -p /etc/apt/keyrings && \
+#     curl -fsSL "https://developer.download.nvidia.com/devtools/repos/ubuntu${rel}/${arch}/nvidia.pub" \
+#     | gpg --dearmor -o /etc/apt/keyrings/nvidia-devtools.gpg && \
+#     echo "deb [signed-by=/etc/apt/keyrings/nvidia-devtools.gpg] https://developer.download.nvidia.com/devtools/repos/ubuntu${rel}/${arch}/ /" \
+#     > /etc/apt/sources.list.d/nvidia-devtools.list && \
+#     apt-get update && \
+#     apt-get install -y --no-install-recommends nsight-systems-cli
+
+# SSH configuration
+RUN mkdir -p /var/run/sshd /root/.ssh && \
+    chmod 700 /root/.ssh && \
+    sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && \
+    sed -i 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' /etc/pam.d/sshd && \
+    ssh-keygen -A

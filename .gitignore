@@ -1,1 +1,9 @@
-sglang_profile
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Reports
+report1.nsys-rep
+sglang_profile/
+sglangsrt.tar.gz
