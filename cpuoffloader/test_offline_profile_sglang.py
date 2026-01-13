@@ -17,7 +17,6 @@ import argparse
 import os
 import time
 import torch
-from transformers import AutoTokenizer
 
 # Set up environment variables for sglang profiling and CPU offload
 os.environ.setdefault("SGLANG_LOGGING_LEVEL", "DEBUG")
@@ -111,13 +110,12 @@ def build_prompts(tokenizer, prompt_len, batch_size, prompt_prefix):
 def main():
     args = parse_args()
 
-    os.environ["SGLANG_CPU_OFFLOAD_NUM_EXPERTS"] = str(args.cpu_offload_num_experts)
+    os.environ["SGLANG_OFFLOAD_NUM_EXPERTS"] = str(args.cpu_offload_num_experts)
     os.environ["SGLANG_TORCH_PROFILER_DIR"] = args.profile_save_dir
-    os.environ["SGLANG_TORCH_PROFILER_RECORD_SHAPES"] = "1" if args.record_shapes else "0"
+    os.environ["SGLANG_TORCH_PROFILER_RECORD_SHAPES"] = "0"
     os.environ["SGLANG_USE_ZERODP"] = "1"
     from sglang.srt.utils.hf_transformers_utils import get_tokenizer
     from sglang.srt.entrypoints.engine import Engine
-    from sglang.srt.sampling.sampling_params import SamplingParams
 
     tokenizer = get_tokenizer(args.model_path)
     prompts = build_prompts(
@@ -139,14 +137,15 @@ def main():
         trust_remote_code=True,
         log_level="info",
         disable_cuda_graph=False,
-        dp_size=2,
-        
+        dp_size=2
     )
-
+    start = time.time()
     engine.start_profile()
     _ = engine.generate(prompts, sampling_params)
     engine.stop_profile()
+    end = time.time()
 
+    print(f"Finished in {end - start:.2f} seconds.")
     time.sleep(args.sleep_after)
 
 
