@@ -92,11 +92,16 @@ def parse_args():
     parser.add_argument(
         "--profile-save-dir",
         type=str,
-        default="./sglang_profile",
+        default=None,
         help="Directory to save the PyTorch profiler traces.",
     )
+    parser.add_argument(
+        "--data-parallel-rank",
+        type=int,
+        default=None,
+        help="Which rank to send requests to.",
+    )
     return parser.parse_args()
-
 
 def build_prompts(tokenizer, prompt_len, batch_size, prompt_prefix):
     vocab_size = tokenizer.vocab_size
@@ -110,9 +115,12 @@ def build_prompts(tokenizer, prompt_len, batch_size, prompt_prefix):
 def main():
     args = parse_args()
 
+    do_profile = args.profile_save_dir is not None
+    if do_profile:
+        os.environ["SGLANG_TORCH_PROFILER_DIR"] = args.profile_save_dir
+        os.environ["SGLANG_TORCH_PROFILER_RECORD_SHAPES"] = "0"
+    
     os.environ["SGLANG_OFFLOAD_NUM_EXPERTS"] = str(args.cpu_offload_num_experts)
-    os.environ["SGLANG_TORCH_PROFILER_DIR"] = args.profile_save_dir
-    os.environ["SGLANG_TORCH_PROFILER_RECORD_SHAPES"] = "0"
     os.environ["SGLANG_USE_ZERODP"] = "1"
     from sglang.srt.utils.hf_transformers_utils import get_tokenizer
     from sglang.srt.entrypoints.engine import Engine
@@ -140,9 +148,14 @@ def main():
         dp_size=2
     )
     start = time.time()
-    engine.start_profile()
-    _ = engine.generate(prompts, sampling_params)
-    engine.stop_profile()
+    
+    if do_profile:
+        engine.start_profile()
+    
+    _ = engine.generate(prompts, sampling_params, data_parallel_rank=args.data_parallel_rank)
+    
+    if do_profile:
+        engine.stop_profile()
     end = time.time()
 
     print(f"Finished in {end - start:.2f} seconds.")
