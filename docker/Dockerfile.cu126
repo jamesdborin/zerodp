@@ -110,17 +110,6 @@ RUN cd /opt/sglang && \
     uv pip install -e "python"
 RUN apt-get update && apt-get install -y vim
 
-# # Install NSYS for profiling - from https://docs.nvidia.com/nsight-systems/InstallationGuide/index.html
-# RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates gnupg && \
-#     . /etc/os-release && rel="$(echo "$VERSION_ID" | tr -d .)" && arch="$(dpkg --print-architecture)" && \
-#     mkdir -p /etc/apt/keyrings && \
-#     curl -fsSL "https://developer.download.nvidia.com/devtools/repos/ubuntu${rel}/${arch}/nvidia.pub" \
-#     | gpg --dearmor -o /etc/apt/keyrings/nvidia-devtools.gpg && \
-#     echo "deb [signed-by=/etc/apt/keyrings/nvidia-devtools.gpg] https://developer.download.nvidia.com/devtools/repos/ubuntu${rel}/${arch}/ /" \
-#     > /etc/apt/sources.list.d/nvidia-devtools.list && \
-#     apt-get update && \
-#     apt-get install -y --no-install-recommends nsight-systems-cli
-
 # SSH configuration
 RUN mkdir -p /var/run/sshd /root/.ssh && \
     chmod 700 /root/.ssh && \
