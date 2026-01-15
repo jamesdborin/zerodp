@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: vllm-qwen3-offload
-Version: 0.1.0
-Summary: vLLM plugin: Qwen3MoE CPU expert offload + ping-pong buffering
-Requires-Python: >=3.9
-Requires-Dist: vllm
-Requires-Dist: torch

@@ -1,2 +1,0 @@
-[vllm.general_plugins]
-qwen3_offload = vllm_qwen3_offload:register

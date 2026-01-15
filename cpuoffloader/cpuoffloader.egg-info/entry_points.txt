@@ -1,2 +1,0 @@
-[vllm.general_plugins]
-cpuoffloader = cpuoffloader:register

@@ -28,7 +28,7 @@ def parse_args():
     )
     parser.add_argument(
         "--model-path",
-        default=os.environ.get("MODEL", "jamesdborin/Qwen3-30B-A3B-4layers"),
+        default=os.environ.get("MODEL", "Qwen/Qwen3-30B-A3B"),
         help="Model identifier or local path to load with sglang.",
     )
     parser.add_argument(
@@ -116,6 +116,7 @@ def main():
     args = parse_args()
 
     do_profile = args.profile_save_dir is not None
+    
     if do_profile:
         os.environ["SGLANG_TORCH_PROFILER_DIR"] = args.profile_save_dir
         os.environ["SGLANG_TORCH_PROFILER_RECORD_SHAPES"] = "0"
